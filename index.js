@@ -594,79 +594,66 @@ async function main() {
   console.log('2. Create Service Subscription and Upload Blob');
   const choice = await promptUser('Enter choice (1 or 2): ');
   
+  let imageSource;
+  let count = 1;
+  let additionalAddresses = [];
+  
   try {
-    let imageSource;
-    logger.divider();
-    console.log('Image source options:');
-    console.log('1. Use URL (default: https://picsum.photos/800/600)');
-    console.log('2. Use local file (image.jpg in script directory)');
-    const imageChoice = await promptUser('Choose image source (1 or 2): ');
-
-    if (imageChoice === '2') {
-      if (!fs.existsSync(LOCAL_IMAGE_PATH)) {
-        logger.error('Error: image.jpg not found in script directory.');
-        process.exit(1);
-      }
-      imageSource = LOCAL_IMAGE_PATH;
-      logger.info('Using local image.jpg');
-    } else {
-      imageSource = await promptUser('Enter image URL (or press Enter for default): ') || DEFAULT_IMAGE_URL;
-      logger.info(`Using image URL: ${imageSource}`);
-    }
+    // Setup image source and task count
+    imageSource = await promptUser('Enter image URL or press Enter for default: ') || DEFAULT_IMAGE_URL;
+    count = parseInt(await promptUser('Enter number of tasks per wallet: ') || '1', 10);
+    additionalAddresses = await promptUser('Enter additional addresses: ').split(',').map(addr => addr.trim());
     
-    const countInput = await promptUser('Enter number of tasks per wallet (default 1): ');
-    const count = parseInt(countInput || '1', 10);
-    if (isNaN(count) || count < 1) {
-      logger.warning('Invalid number. Using default value of 1.');
-      count = 1;
-    }
-    
-    let additionalAddresses = [];
-    if (choice === '1') {
-      const addressesInput = await promptUser('Enter additional addresses to add to allowlist (comma-separated, or press Enter for none): ');
-      if (addressesInput.trim()) {
-        additionalAddresses = addressesInput
-          .split(',')
-          .map(addr => addr.trim())
-          .filter(addr => addr);
-        logger.info(`Will add ${additionalAddresses.length} additional addresses to each allowlist`);
-      }
-    }
-    
+    // Processing wallets and handling retries
     for (let i = 0; i < wallets.length; i++) {
+      let retryCount = 0;
+      let taskSucceeded = false;
       logger.divider();
       logger.wallet(`Processing wallet ${i+1} of ${wallets.length}`);
       
       const bot = new SuiAllowlistBot(wallets[i], proxyManager);
       logger.wallet(`Wallet address: ${bot.getAddress()}`);
       
-      if (choice === '1') {
-        logger.info(`Starting allowlist workflow (${count} tasks)`);
-        const results = await bot.runAllowlistWorkflow(imageSource, additionalAddresses, count);
-        
-        logger.divider();
-        logger.success(`Wallet ${i+1} summary:`);
-        results.forEach((result, idx) => {
-          logger.info(`Allowlist ${idx+1}:`);
-          logger.result('Allowlist ID', result.allowlistId);
-          logger.result('Entry ID', result.entryObjectId);
-          logger.result('Blob ID', result.blobId);
-        });
-      } else if (choice === '2') {
-        logger.info(`Starting service subscription workflow (${count} tasks)`);
-        const results = await bot.runServiceSubscriptionWorkflow(imageSource, count);
-        
-        logger.divider(); 
-        logger.success(`Wallet ${i+1} summary:`);
-        results.forEach((result, idx) => {
-          logger.info(`Service ${idx+1}:`);
-          logger.result('Shared ID', result.sharedObjectId);
-          logger.result('Entry ID', result.serviceEntryId);
-          logger.result('Blob ID', result.blobId);
-        });
-      } else {
-        logger.error('Invalid choice. Please enter 1 or 2.');
-        break;
+      // Retry loop for the wallet in case of failure
+      while (!taskSucceeded && retryCount < 3) {
+        try {
+          if (choice === '1') {
+            logger.info(`Starting allowlist workflow (${count} tasks)`);
+            const results = await bot.runAllowlistWorkflow(imageSource, additionalAddresses, count);
+            logger.divider();
+            logger.success(`Wallet ${i+1} summary:`);
+            results.forEach((result, idx) => {
+              logger.info(`Allowlist ${idx+1}:`);
+              logger.result('Allowlist ID', result.allowlistId);
+              logger.result('Entry ID', result.entryObjectId);
+              logger.result('Blob ID', result.blobId);
+            });
+            taskSucceeded = true;
+          } else if (choice === '2') {
+            logger.info(`Starting service subscription workflow (${count} tasks)`);
+            const results = await bot.runServiceSubscriptionWorkflow(imageSource, count);
+            logger.divider(); 
+            logger.success(`Wallet ${i+1} summary:`);
+            results.forEach((result, idx) => {
+              logger.info(`Service ${idx+1}:`);
+              logger.result('Shared ID', result.sharedObjectId);
+              logger.result('Entry ID', result.serviceEntryId);
+              logger.result('Blob ID', result.blobId);
+            });
+            taskSucceeded = true;
+          } else {
+            logger.error('Invalid choice. Please enter 1 or 2.');
+            break;
+          }
+        } catch (error) {
+          retryCount++;
+          logger.error(`Error on wallet ${i+1} (attempt ${retryCount}): ${error.message}`);
+          if (retryCount < 3) {
+            logger.warning(`Retrying wallet ${i+1} (attempt ${retryCount + 1})...`);
+          } else {
+            logger.error(`Failed to process wallet ${i+1} after 3 attempts.`);
+          }
+        }
       }
     }
     
@@ -679,5 +666,3 @@ async function main() {
     process.exit(0);
   }
 }
-
-main();
